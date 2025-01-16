@@ -1,17 +1,15 @@
 # IIITG Auto Firewall Auth Manager
-
 This script automates firewall authentication for IIITG networks.
 
-## Getting Started
-
-### Prerequisites
-- Ensure you have `curl` installed.
-- You must have `sudo` access to execute the script.
-
 ### Installation and Usage
-
 To fetch and execute the script, simply run the following command in your terminal:
-
+## With Curl
 ```bash
-curl -sL https://github.com/ShauryaManiTripathi/IIITG-auto-firewall-auth/releases/download/release/manager.sh | sudo bash
+curl -fsSL https://github.com/ShauryaManiTripathi/IIITG-auto-firewall-auth/releases/download/release/manager.sh -o manager.sh && chmod +x manager.sh && sudo ./manager.sh
 ```
+
+## With Wget
+```bash
+wget https://github.com/ShauryaManiTripathi/IIITG-auto-firewall-auth/releases/download/release/manager.sh -O manager.sh && chmod +x manager.sh && sudo ./manager.sh
+```
+
