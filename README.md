@@ -1,5 +1,4 @@
-# IIITG Auto Firewall Auth [![Rust](https://img.shields.io/badge/language-Rust-orange.svg?logo=rust)](https://www.rust-lang.org/) ![Linux](https://www.vectorlogo.zone/logos/linux/linux-icon.svg)
-
+# IIITG Auto Firewall Auth [![Rust](https://img.shields.io/badge/language-Rust-orange.svg?logo=rust)](https://www.rust-lang.org/)
 This script automates firewall authentication for IIITG networks.
 
 ### Installation and Usage
