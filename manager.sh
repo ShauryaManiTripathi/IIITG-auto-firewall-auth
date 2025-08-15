@@ -1,3 +1,196 @@
+#!/bin/bash
+
+# A robust, multi-distro installer for the IIITG Auth Client.
+# It detects the Linux distribution family, checks dependencies, compiles the Rust code,
+# installs the binary, and sets up a systemd service.
+
+# --- Script Configuration ---
+set -euo pipefail
+
+# --- Color Definitions ---
+C_RESET='\033[0m'
+C_RED='\033[0;31m'
+C_GREEN='\033[0;32m'
+C_YELLOW='\033[0;33m'
+C_BLUE='\033[0;34m'
+
+# --- Helper Functions ---
+info() {
+    echo -e "${C_BLUE}INFO:${C_RESET} $1"
+}
+
+success() {
+    echo -e "${C_GREEN}SUCCESS:${C_RESET} $1"
+}
+
+warn() {
+    echo -e "${C_YELLOW}WARNING:${C_RESET} $1"
+}
+
+error() {
+    echo -e "${C_RED}ERROR:${C_RESET} $1"
+    exit 1
+}
+
+# --- Main Logic ---
+main() {
+    if [[ "$EUID" -eq 0 ]]; then
+        error "This script should not be run as root. It will use 'sudo' when necessary."
+    fi
+
+    info "Starting the installation of IIITG Auth Client."
+    echo
+
+    check_dependencies
+    check_rust
+    compile_and_install
+    setup_systemd_service
+
+    echo
+    success "IIITG Auth Client installation is complete!"
+    echo
+    info "--------------------------- IMPORTANT NEXT STEPS ---------------------------"
+    info "1. You MUST configure your account credentials now."
+    info "   Run the following command:"
+    echo -e "   ${C_YELLOW}iiitg-auth --manage${C_RESET}"
+    echo
+    info "2. The background service has been started. To check its status, run:"
+    echo -e "   ${C_YELLOW}systemctl --user status iiitg-auth.service${C_RESET}"
+    echo
+    info "3. To view live logs from the service, run:"
+    echo -e "   ${C_YELLOW}journalctl --user -u iiitg-auth.service -f${C_RESET}"
+    info "--------------------------------------------------------------------------"
+}
+
+check_dependencies() {
+    info "Checking for required system dependencies..."
+
+    if ! [ -f /etc/os-release ]; then
+        error "Cannot detect Linux distribution: /etc/os-release not found."
+    fi
+    . /etc/os-release
+
+    local distro_family=""
+    if [[ -n "${ID_LIKE-}" ]]; then
+        if [[ "$ID_LIKE" =~ "debian" ]]; then distro_family="debian";
+        elif [[ "$ID_LIKE" =~ "fedora" ]]; then distro_family="fedora";
+        elif [[ "$ID_LIKE" =~ "arch" ]]; then distro_family="arch"; fi
+    fi
+
+    if [[ -z "$distro_family" ]]; then
+        if [[ "$ID" =~ "debian"|"ubuntu"|"pop"|"mint" ]]; then distro_family="debian";
+        elif [[ "$ID" =~ "fedora"|"centos"|"rhel" ]]; then distro_family="fedora";
+        elif [[ "$ID" =~ "arch"|"manjaro"|"endeavouros" ]]; then distro_family="arch"; fi
+    fi
+
+    local pkg_manager_check_cmd=""
+    local install_cmd=""
+    local update_cmd=""
+    local required_pkgs=()
+
+    case "$distro_family" in
+        debian)
+            info "Debian-based distribution detected ($NAME)."
+            pkg_manager_check_cmd="dpkg -s"
+            update_cmd="sudo apt-get update"
+            install_cmd="sudo apt-get install -y"
+            required_pkgs=("build-essential" "pkg-config" "libssl-dev" "curl")
+            ;;
+        fedora)
+            info "Fedora/RHEL-based distribution detected ($NAME)."
+            pkg_manager_check_cmd="rpm -q"
+            install_cmd="sudo dnf install -y"
+            required_pkgs=("gcc" "gcc-c++" "make" "pkgconf-pkg-config" "openssl-devel" "curl")
+            ;;
+        arch)
+            info "Arch-based distribution detected ($NAME)."
+            pkg_manager_check_cmd="pacman -Q"
+            install_cmd="sudo pacman -S --noconfirm --needed"
+            required_pkgs=("base-devel" "openssl" "curl")
+            ;;
+        *)
+            error "Unsupported distribution: '$NAME'. Please install dependencies manually and re-run.
+Required: C/C++ compiler, make, pkg-config, OpenSSL headers (libssl-dev/openssl-devel), curl."
+            ;;
+    esac
+
+    local missing_pkgs=()
+    for pkg in "${required_pkgs[@]}"; do
+        if ! $pkg_manager_check_cmd "$pkg" &> /dev/null; then missing_pkgs+=("$pkg"); fi
+    done
+
+    if [[ ${#missing_pkgs[@]} -gt 0 ]]; then
+        warn "The following packages are required but not found: ${missing_pkgs[*]}"
+        read -p "Do you want to install them now? (y/N): " choice
+        if [[ "$choice" =~ ^[Yy]$ ]]; then
+            info "Installing missing packages. This may require your password."
+            [[ -n "$update_cmd" ]] && $update_cmd
+            $install_cmd "${missing_pkgs[@]}" || error "Failed to install required packages."
+            success "Dependencies installed."
+        else
+            error "Dependencies not installed. Aborting installation."
+        fi
+    else
+        success "All system dependencies are already installed."
+    fi
+    echo
+}
+
+check_rust() {
+    info "Checking for Rust compiler (cargo)..."
+    if command -v cargo &> /dev/null; then
+        success "Rust is already installed."
+    else
+        warn "Rust is not installed. It is required to compile the client."
+        read -p "Do you want to install Rust via rustup now? (y/N): " choice
+        if [[ "$choice" =~ ^[Yy]$ ]]; then
+            info "Downloading and running rustup-init.sh..."
+            # CORRECTED: Using the secure curl command with non-interactive flags
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            source "$HOME/.cargo/env"
+            success "Rust has been installed."
+        else
+            error "Rust not installed. Aborting installation."
+        fi
+    fi
+    echo
+}
+
+compile_and_install() {
+    local TEMP_DIR
+    TEMP_DIR=$(mktemp -d)
+    trap 'rm -rf "$TEMP_DIR"' EXIT
+
+    info "Setting up build environment in $TEMP_DIR"
+    cd "$TEMP_DIR"
+    mkdir -p iiitg-auth/src
+    cd iiitg-auth
+
+    info "Creating Cargo.toml..."
+    cat > Cargo.toml << EOL
+[package]
+name = "iiitg-auth"
+version = "0.2.1"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "time", "process"] }
+reqwest = { version = "0.12", features = ["json"] }
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+aes-gcm = "0.10"
+rand = "0.8"
+dialoguer = "0.11"
+notify-rust = "4"
+directories = "6.0"
+log = "0.4"
+env_logger = "0.11"
+futures = "0.3"
+EOL
+
+    info "Creating src/main.rs..."
+    cat > src/main.rs << 'EOL'
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Key, Nonce
@@ -518,3 +711,56 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
+EOL
+
+    info "Compiling the Rust project (this may take a few minutes)..."
+    if [ -f "$HOME/.cargo/env" ]; then
+        source "$HOME/.cargo/env"
+    fi
+    cargo build --release || error "Compilation failed. Please check the error messages above."
+    success "Project compiled successfully."
+    echo
+
+    info "Installing the binary to /usr/local/bin..."
+    sudo cp target/release/iiitg-auth /usr/local/bin/iiitg-auth
+    sudo chmod +x /usr/local/bin/iiitg-auth
+    success "Binary installed."
+}
+
+setup_systemd_service() {
+    info "Setting up systemd service to run the client in the background..."
+    local current_user
+    current_user=$(whoami)
+    local service_file_path="$HOME/.config/systemd/user/iiitg-auth.service"
+
+    mkdir -p "$HOME/.config/systemd/user"
+
+    info "Creating systemd service file at $service_file_path"
+    cat > "$service_file_path" << EOL
+[Unit]
+Description=IIITG Auth Client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/iiitg-auth
+Restart=on-failure
+RestartSec=10
+Environment="RUST_LOG=info"
+
+[Install]
+WantedBy=default.target
+EOL
+    success "Service file created."
+
+    info "Enabling and starting the service for user $current_user..."
+    sudo loginctl enable-linger "$current_user"
+
+    systemctl --user daemon-reload
+    systemctl --user enable iiitg-auth.service
+    systemctl --user restart iiitg-auth.service
+
+    success "Systemd service 'iiitg-auth.service' is now enabled and running."
+}
+
+main
