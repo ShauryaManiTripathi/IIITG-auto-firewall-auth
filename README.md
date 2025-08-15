@@ -8,7 +8,7 @@ Linux System with [Systemd] and [pacman|apt|dnf]
 
 after installing ,run 
 ```bash
-iiitg-auth
+iiitg-auth --manage
 ```
 to add username and password
 
